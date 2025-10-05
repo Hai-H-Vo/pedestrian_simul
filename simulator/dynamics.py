@@ -122,6 +122,48 @@ class PedestrianState(namedtuple("PedestrianState", ['position', 'velocity', 'ra
         """Returns the orientation angle of all pedestrians"""
         return angle_correct(np.atan2(self.velocity[:, 1], self.velocity[:, 0]))
 
+    def kinetic(self):
+        """Returns the kinetic energy of all pedestrians"""
+        return (np.linalg.norm(self.velocity, axis=1) ** 2) / 2
+
+def orient_goal(goal, position):
+    # updates new goal orientation to point towards goal point:
+    disp_to_goal = goal - position
+    dist_to_goal = np.linalg.norm(disp_to_goal, axis=1)
+    _dist_to_goal = np.stack([dist_to_goal, dist_to_goal], axis=1)
+    unit_disp_to_goal = disp_to_goal / _dist_to_goal
+    goal_orient = np.arctan2(unit_disp_to_goal[:, 1], unit_disp_to_goal[:, 0])
+
+    return goal_orient
+
+
+class ExperimentalPedestrianState(namedtuple("PedestrianState", ['position', 'velocity', 'radius', 'goal_speed', 'key', 'goal', 'goal_orientation'])):
+    """Implements state of pedestrians, using goal points instead of goal directions
+
+    Args:
+        position: (N, 2) array of positions
+        velocity: (N, 2) array of velocities
+        radius: 1 scalar of particle radius
+        goal_speed: (1,)/(N, 1) array of goal speeds
+        key: RNG key for stochasticity
+
+    Optional args:
+        goal: (N, 2) list of goals for each particle
+    The functions decides when a target is reached, and decides the new target then.
+    """
+    def speed(self):
+        """Returns the speed of all pedestrians"""
+        return np.sqrt(self.velocity[:, 0] ** 2 + self.velocity[:, 1] ** 2)
+
+    def orientation(self):
+        """Returns the orientation angle of all pedestrians"""
+        return angle_correct(np.atan2(self.velocity[:, 1], self.velocity[:, 0]))
+
+    def kinetic(self):
+        """Returns the kinetic energy of all pedestrians"""
+        return (np.linalg.norm(self.velocity, axis=1) ** 2) / 2
+
+
 class Wall(object):
     pass
 
@@ -149,6 +191,7 @@ def pedestrian(shift_fn, force_fn, dt, N, **sim_kwargs):
 
     Extra inputs:
         stochastic (bool)   : True if simulation should be stochastic. Defaults to True
+        experimental (bool) : True to toggle some experimental features. Defaults to False
 
     Outputs:
         init_fn, step_fn (funcs): functions to initialize the simulation and to timestep
@@ -162,71 +205,170 @@ def pedestrian(shift_fn, force_fn, dt, N, **sim_kwargs):
     else:
         stochastic = True
 
-    def init_fn(pos, radius, **kwargs):
-        """
-        Initializes a pedestrian simulation.
+    if 'experimental' in sim_kwargs:
+        experimental = sim_kwargs['experimental']
+    else:
+        experimental = False
 
-        Inputs:
-            pos (Array): position of all pedestrians
-            radius (float): collision radius of pedestrians
+    if not experimental:
+        def init_fn(pos, radius, **kwargs):
+            """
+            Initializes a pedestrian simulation.
 
-        Extra Inputs:
-            key (RNG key)
-            goal_speed (Array)
-            goal_orientation (Array)
-            velocity (Array)
+            Inputs:
+                pos (Array): position of all pedestrians
+                radius (float): collision radius of pedestrians
 
-        Output:
-            A PedestrianState instance.
-        """
-        key = kwargs['key'] if 'key' in kwargs else None
+            Extra Inputs:
+                key (RNG key)
+                goal_speed (Array)
+                goal_orientation (Array)
+                velocity (Array)
 
-        if 'goal_speed' in kwargs:
-            goal_speed = kwargs['goal_speed']
-        else:
-            if key is None:
-                raise ValueError("PRNG key required for initializing goal speed")
-            key, split = random.split(key)
-            goal_speed = init_goal_speed(split, N)
+            Output:
+                A PedestrianState instance.
+            """
+            key = kwargs['key'] if 'key' in kwargs else None
 
-        if 'goal_orientation' in kwargs:
-            goal_orientation = kwargs['goal_orientation']
-        else:
-            goal_orientation = None
+            if 'goal_speed' in kwargs:
+                goal_speed = kwargs['goal_speed']
+            else:
+                if key is None:
+                    raise ValueError("PRNG key required for initializing goal speed")
+                key, split = random.split(key)
+                goal_speed = init_goal_speed(split, N)
 
-        if 'velocity' in kwargs:
-            velocity = kwargs['velocity']
-        elif goal_orientation is not None:
-            velocity = normal(goal_speed, goal_orientation)
-        else:
-            if key is None:
-                raise ValueError("PRNG key required for initializing goal speed")
-            key, split = random.split(key)
-            orient = random.uniform(split, (N,), minval=0, maxval=2 * onp.pi)
-            velocity = normal(goal_speed, orient)
+            if 'goal_orientation' in kwargs:
+                goal_orientation = kwargs['goal_orientation']
+            else:
+                goal_orientation = None
 
+            if 'velocity' in kwargs:
+                velocity = kwargs['velocity']
+            elif goal_orientation is not None:
+                velocity = normal(goal_speed, goal_orientation)
+            else:
+                if key is None:
+                    raise ValueError("PRNG key required for initializing goal speed")
+                key, split = random.split(key)
+                orient = random.uniform(split, (N,), minval=0, maxval=2 * onp.pi)
+                velocity = normal(goal_speed, orient)
 
-        return PedestrianState(pos, velocity, radius, goal_speed, goal_orientation, key)
+            return PedestrianState(pos, velocity, radius, goal_speed, goal_orientation, key)
 
+        def step_fn(_, state):
+            dstate = force_fn(state)
 
-    def step_fn(_, state):
-        dstate = force_fn(state)
+            # stochastic impl
+            if stochastic:
+                key, split = random.split(state.key)
+                svelocity = random.uniform(split, (N, 2), minval=-1.0, maxval=1.0)
+            else:
+                key = state.key
+                svelocity = np.zeros((N, 2))
 
-        # stochastic impl
-        if stochastic:
-            key, split = random.split(state.key)
-            svelocity = random.uniform(split, (N, 2), minval=-1.0, maxval=1.0)
-        else:
-            key = state.key
-            svelocity = np.zeros((N, 2))
+            rad = dstate.radius if dstate.radius is not None else state.radius
+            goal_speed = dstate.goal_speed if dstate.goal_speed is not None else state.goal_speed
+            goal_orientation = dstate.goal_orientation if dstate.goal_orientation is not None else state.goal_orientation
 
-        return PedestrianState(
-            shift_fn(state.position, state.velocity * dt),
-            state.velocity + (dstate.position + svelocity) * dt,
-            state.radius,
-            state.goal_speed,
-            state.goal_orientation,
-            key
-        )
+            return PedestrianState(
+                shift_fn(state.position, state.velocity * dt),
+                state.velocity + (dstate.position + svelocity) * dt,
+                rad,
+                goal_speed,
+                goal_orientation,
+                key
+            )
+
+    else:
+        def init_fn(pos, radius, **kwargs):
+            """
+            Initializes a pedestrian simulation.
+
+            Inputs:
+                pos (Array): position of all pedestrians
+                radius (float): collision radius of pedestrians
+
+            Extra Inputs:
+                key (RNG key)
+                goal_speed (Array)
+                velocity (Array)
+                goal (list(list(list(float, float))))
+                status (list(int))
+                condition (list(functions(idx, state)))
+
+            Output:
+                An ExperimentalPedestrianState instance.
+            """
+            key = kwargs['key'] if 'key' in kwargs else None
+
+            if 'goal_speed' in kwargs:
+                goal_speed = kwargs['goal_speed']
+            else:
+                if key is None:
+                    raise ValueError("PRNG key required for initializing goal speed")
+                key, split = random.split(key)
+                goal_speed = init_goal_speed(split, N)
+
+            if 'goal' in kwargs:
+                goal = kwargs['goal']
+            else:
+                goal = None
+
+            # if 'condition' in kwargs:
+            #     condition = kwargs['condition']
+            # else:
+            #     condition = None if goal is None else [lambda idx, state: idx for _ in goal]
+
+            if goal is None:
+                if 'goal_orientation' in kwargs:
+                    goal_orientation = kwargs['goal_orientation']
+                else:
+                    goal_orientation = None
+            else:
+                goal_orientation = orient_goal(goal, pos)
+
+            if 'velocity' in kwargs:
+                velocity = kwargs['velocity']
+            elif goal_orientation is not None:
+                velocity = normal(goal_speed, goal_orientation)
+            else:
+                if key is None:
+                    raise ValueError("PRNG key required for initializing goal speed")
+                key, split = random.split(key)
+                orient = random.uniform(split, (N,), minval=0, maxval=2 * onp.pi)
+                velocity = normal(goal_speed, orient)
+
+            return ExperimentalPedestrianState(pos, velocity, radius, goal_speed, key, goal, goal_orientation)
+
+        def step_fn(_, state):
+            dstate = force_fn(state)
+
+            # stochastic impl
+            if stochastic:
+                key, split = random.split(state.key)
+                svelocity = random.uniform(split, (N, 2), minval=-1.0, maxval=1.0)
+            else:
+                key = state.key
+                svelocity = np.zeros((N, 2))
+
+            new_pos = shift_fn(state.position, state.velocity * dt)
+            new_velocity = state.velocity + (dstate.position + svelocity) * dt
+            new_goal = dstate.goal if dstate.goal is not None else state.goal
+
+            if new_goal is not None:
+                new_goal_orientation = orient_goal(new_goal, new_pos)
+            else:
+                new_goal_orientation = state.goal_orientation
+
+            return ExperimentalPedestrianState(
+                new_pos,
+                new_velocity,
+                state.radius,
+                state.goal_speed,
+                key,
+                new_goal,
+                new_goal_orientation
+            )
 
     return init_fn, step_fn

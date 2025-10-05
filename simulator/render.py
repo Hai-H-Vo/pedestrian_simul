@@ -17,7 +17,7 @@ sns.set_style(style="white")
 # RENDERING
 
 
-def render(box_size, states, dt, DELTA, name="default", **kwargs):
+def render(box_size, states, time_step, name="default", origin = (0, 0), **kwargs):
     """
     Creates a rendering of the system. Edit this to
     make it run on matplotlib.
@@ -29,24 +29,30 @@ def render(box_size, states, dt, DELTA, name="default", **kwargs):
     Inputs:
         box_size (float): size-length of box
         states (list(array)): list of particle positions.
-        dt (float): simulation time step
-        DELTA (int/float): number of time steps between simulation save
+        time_step (float): rendering time step, equal to dt * DELTA
         name (text): name of file to be saved
+        origin (indexable): coordinates of the origin of simulation. Defaults to (0, 0)
 
     Extra inputs:
         extra (list(array)): list of any other particle parameter
         limits (tuple(min, max)): tuple of minimum and maximum values of above param
+        periodic (bool): True if extra is a periodic param (e.g. angle). Defaults to True
         walls (list(Walls)): list of walls to render
+        lines (list(Array)): list of lines to add
         size (float): size of simulated particles, measured in same unit as box_size
 
     Output:
         {name}.mp4 file of box state, runs at 50fps
     """
     # if states is a list (sequence of simul. frames)
-    if not isinstance(states, (onp.ndarray, jax.Array)):
-        if not isinstance(states, list):
-            states = [states]
-        states = np.array(states)
+    # if not isinstance(states, (onp.ndarray, jax.Array)):
+    #     if not isinstance(states, list):
+    #         states = [states]
+    #     states = np.array(states)
+
+    if not isinstance(states, list):
+        states = [states]
+
 
     R = states
 
@@ -57,14 +63,23 @@ def render(box_size, states, dt, DELTA, name="default", **kwargs):
         extra = kwargs['extra']
         ex_min, ex_max = kwargs['limits']
 
+        if 'periodic' not in kwargs:
+            cmap = plt.cm.get_cmap('hsv')
+        else:
+            cmap = plt.cm.get_cmap('hsv') if kwargs['periodic'] else plt.cm.get_cmap('plasma')
+
+        cmap.set_over('black')
+        cmap.set_under('black')
+
     # retrieve number of frames
-    frames = R.shape[0]
+    # frames = R.shape[0]
+    frames = len(R)
 
     fig, ax = plt.subplots()
 
     # formatting plot
-    ax.set_xlim(0, box_size)
-    ax.set_ylim(0, box_size)
+    ax.set_xlim(origin[0], origin[0] + box_size)
+    ax.set_ylim(origin[1], origin[1] + box_size)
 
     # size parameter
     if 'size' not in kwargs:
@@ -93,18 +108,23 @@ def render(box_size, states, dt, DELTA, name="default", **kwargs):
 
         # particles data
         curr_R = R[frame_num]
-        curr_theta = extra[frame_num]
         curr_x = curr_R[:, 0]
         curr_y = curr_R[:, 1]
 
         # rendering: USE COLOR TO ENCODE POLARIZATION/ ANGLE OF PARTICLES.
-        particle_plot = ax.scatter(
-            curr_x, curr_y, c=curr_theta, s = size, cmap="hsv", vmin=ex_min, vmax=ex_max
-        )
+        if extra is not None:
+            curr_extra = extra[frame_num]
+            particle_plot = ax.scatter(
+            curr_x, curr_y, c=curr_extra, s = size, cmap=cmap, vmin=ex_min, vmax=ex_max
+            )
+        else:
+            particle_plot = ax.scatter(
+            curr_x, curr_y, s = size, c='black')
+
         timer = ax.text(
             0.5,
             1.05,
-            f"t = {dt * DELTA * frame_num:.2f}",
+            f"t = {time_step * frame_num:.2f}",
             size=plt.rcParams["axes.titlesize"],
             ha="center",
             transform=ax.transAxes,
@@ -115,9 +135,11 @@ def render(box_size, states, dt, DELTA, name="default", **kwargs):
     artists = []
     for frame in range(frames):
         artists.append(renderer_code(frame))
+        print(f'Rendered {frame + 1}/{frames} frames')
 
-    # COLORBAR FOR ANGLE
-    fig.colorbar(artists[0][0])
+    # COLORBAR FOR EXTRA
+    if extra is not None:
+        fig.colorbar(artists[0][0])
 
     # WALL RENDERING
     if 'walls' in kwargs:
@@ -128,6 +150,14 @@ def render(box_size, states, dt, DELTA, name="default", **kwargs):
             x_wall = [start[0], end[0]]
             y_wall = [start[1], end[1]]
             ax.plot(x_wall, y_wall, 'k')
+
+    # EXTRA DRAWING
+    if 'lines' in kwargs:
+        lines = kwargs['lines']
+        for line in lines:
+            ax.plot(line[:, 0], line[:, 1], '--k')
+
+    print("Building animation...")
 
     # build the animation
     anim = ani.ArtistAnimation(fig, artists, interval=20, repeat_delay=1000, blit=False)

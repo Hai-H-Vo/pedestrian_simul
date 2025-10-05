@@ -19,7 +19,7 @@ vectorize = np.vectorize
 from functools import partial
 
 from .basis import LegendrePolynomial, LaguerrePolynomial, LaguerreBase, LegendreBase
-from .utils import wall_energy, align_fn, ttc_potential_fn, ttc_tot, ttc_force, normalize_cap
+from .utils import wall_energy, align_fn, ttc_potential_fn, ttc_tot, ttc_force, normalize_cap, goal_velocity_force
 
 # WALL INTERACTIONS
 
@@ -65,6 +65,23 @@ def ttc_force_tot(pos, V, R, displacement, k=1.5, t_0=3.0):
    dpos = space.map_product(displacement)(pos, pos)
 
    return np.sum(normalize_cap(force_fn(dpos, V, V, R, k, t_0), 5), axis=1)
+
+def goal_velocity_force_tot(velocities, goal_speeds, goal_orientations=None):
+   """
+   Force representing pedestrian's target velocity.
+
+   Arguments:
+      velocities (jax.Array): array of particles' velocities
+      goal_speeds (jax.Array): array of particles' preferred speeds
+      goal_orientations (jax.Array / None): array of particles' preferred directions. If
+      None is provided, then it is assumed that there is no preferred direction.
+
+   Output:
+      jax.Array of force acting on each particle
+   """
+   if goal_orientations is None:
+      return (goal_speeds / np.linalg.norm(velocities, axis=1) - 1) * velocities / .5
+   return vmap(goal_velocity_force, (0, 0, 0))(velocities, goal_speeds, goal_orientations)
 
 # BASIS POLYNOMIAL EXPANSION
 

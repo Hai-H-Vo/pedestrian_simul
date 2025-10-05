@@ -19,8 +19,8 @@ from collections import namedtuple
 vectorize = np.vectorize
 
 from functools import partial
-from simulator.utils import normal, goal_velocity_force
-from simulator.force import ttc_force_tot
+from simulator.utils import normal
+from simulator.force import ttc_force_tot, goal_velocity_force_tot
 from simulator.render import render
 from simulator.dynamics import pedestrian, PedestrianState, StraightWall
 
@@ -37,7 +37,7 @@ V_key, pos_key = random.split(key)
 
 def force_fn(state):
     body_force = quantity.force(energy.soft_sphere_pair(displacement, sigma=2.*state.radius))
-    return PedestrianState(ttc_force_tot(state.position, state.velocity, state.radius, displacement, 1.5, 3) + body_force(state.position) + goal_velocity_force(state), None, None, None, None, None)
+    return PedestrianState(ttc_force_tot(state.position, state.velocity, state.radius, displacement, 1.5, 3) + body_force(state.position) + goal_velocity_force_tot(state.velocity, state.goal_speed, state.goal_orientation), None, None, None, None, None)
 
 init, step = pedestrian(shift, force_fn, dt, N)
 
@@ -73,10 +73,10 @@ for i in range(1500):
 print(state)
 
 # MP4 PRODUCTION
-# render(frame_size, positions, dt, delta, 'pedestrian_crossing', extra=thetas, limits=(0, 2 * onp.pi))
+render(frame_size, positions, dt * delta, 'pedestrian_crossing', extra=thetas, limits=(0, 2 * onp.pi))
 
-# NPZ PRODUCTION
-np_positions = np.array(positions)
-np_orientations = np.array(thetas)
-time_step = np.array(delta * dt)
-np.savez("pedestrian_crossing", positions = np_positions, goal_orientations = np_orientations, time_step=time_step)
+# # NPZ PRODUCTION
+# np_positions = np.array(positions)
+# np_orientations = np.array(thetas)
+# time_step = np.array(delta * dt)
+# np.savez("pedestrian_crossing", positions = np_positions, goal_orientations = np_orientations, time_step=time_step)

@@ -19,8 +19,8 @@ from collections import namedtuple
 vectorize = np.vectorize
 
 from functools import partial
-from simulator.utils import normal, goal_velocity_force
-from simulator.force import ttc_force_tot, wall_energy_tot
+from simulator.utils import normal
+from simulator.force import ttc_force_tot, wall_energy_tot, goal_velocity_force_tot
 from simulator.render import render
 from simulator.dynamics import pedestrian, PedestrianState, StraightWall
 
@@ -50,7 +50,7 @@ def energy_fn(pos, radius):
 def force_fn(state):
     wall_force = quantity.force(partial(energy_fn, radius=state.radius))
     body_force = quantity.force(energy.soft_sphere_pair(displacement, sigma=2.*state.radius))
-    return PedestrianState(ttc_force_tot(state.position, state.velocity, state.radius, displacement, 1.5, 3) + body_force(state.position) + wall_force(state.position) + goal_velocity_force(state), None, None, None, None, None)
+    return PedestrianState(ttc_force_tot(state.position, state.velocity, state.radius, displacement, 1.5, 3) + body_force(state.position) + wall_force(state.position) + goal_velocity_force_tot(state.velocity, state.goal_speed, state.goal_orientation), None, None, None, None, None, None)
 
 init, step = pedestrian(shift, force_fn, dt, N)
 
@@ -80,6 +80,7 @@ goal_orientation = np.concatenate((np.zeros((150,)), onp.pi * np.ones((150,))))
 state = init(pos, 0.1, key=V_key, goal_orientation=goal_orientation)
 
 positions = []
+velocities = []
 thetas = []
 
 for i in range(1250):
@@ -87,15 +88,17 @@ for i in range(1250):
   state = lax.fori_loop(0, delta, step, state)
 
   positions += [state.position]
+  velocities += [state.velocity]
   thetas += [state.goal_orientation]
 
 print(state)
 
 # MP4 PRODUCTION
-# render(box_size, positions, dt, delta, 'pedestrian_hallway', extra=thetas, limits=(0, 2 * onp.pi), walls=[wall_low, wall_up])
+render(box_size, positions, dt * delta, 'pedestrian_hallway', extra=thetas, limits=(0, 2 * onp.pi), walls=[wall_low, wall_up])
 
-# NPZ PRODUCTION
+# # NPZ PRODUCTION
 np_positions = np.array(positions)
+np_velocities = np.array(velocities)
 np_orientations = np.array(thetas)
 time_step = np.array(delta * dt)
 
@@ -103,4 +106,4 @@ np_wall_low = np.array([ll, lr])
 np_wall_up = np.array([ul, ur])
 np_walls = np.array([np_wall_low, np_wall_up])
 
-np.savez("pedestrian_hallway", positions = np_positions, goal_orientations = np_orientations, walls = np_walls, time_step=time_step)
+np.savez("pedestrian_hallway", positions = np_positions, velocities = np_velocities, goal_orientations = np_orientations, walls = np_walls, time_step=time_step)

@@ -65,4 +65,4 @@ for i in range(200):
 
 print(state)
 
-render(frame_size, positions, dt, delta, 'pedestrian_scattering', extra=thetas, limits=(0, 2 * onp.pi), size=0.1)
+render(frame_size, positions, dt * delta, 'pedestrian_scattering', extra=thetas, limits=(0, 2 * onp.pi), size=0.1)

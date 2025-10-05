@@ -197,10 +197,16 @@ def _ttc_force_tot(pos, V, R, displacement, k=1.5, t_0=3.0):
 
    return np.sum(force_fn(dpos, V, V, R, k, t_0), axis=1)
 
-def goal_velocity_force(state):
-   if state.goal_orientation is None:
-      return (normal(state.goal_speed, state.orientation()) - state.velocity) / .5
-   return (normal(state.goal_speed, state.goal_orientation) - state.velocity) / .5
+# def goal_velocity_force(state):
+#    if state.goal_orientation is None:
+#       return (normal(state.goal_speed, state.orientation()) - state.velocity) / .5
+#    return (normal(state.goal_speed, state.goal_orientation) - state.velocity) / .5
+
+def goal_velocity_force(velocity, goal_speed, goal_orientation):
+   return (goal_speed * np.array([np.cos(goal_orientation), np.sin(goal_orientation)]) - velocity) / .5
+
+def numpify_wall(wall):
+   return np.array([wall.start, wall.end])
 
 # TEST SECTION
 
@@ -466,3 +472,55 @@ def general_force_generator_TEST_4(weight_paral_arr, weight_perpen_arr, v_0, d_0
    init_end_time = time.time()
    print(f"test_4_init_runtime = {init_end_time - init_start_time}")
    return general_force
+
+# DATA STRUCT
+
+class LoopedList(object):
+   def __init__(self, elts):
+      self.elts = elts
+
+   def __repr__(self):
+      return f"LoopedList({self.elts})"
+
+   def __eq__(self, other):
+      return self.elts == other.elts
+
+   def __len__(self):
+      return len(self.elts)
+
+   def __getitem__(self, idx):
+      return self.elts[idx % len(self)]
+
+   def __setitem__(self, idx, val):
+      self.elts[idx % len(self)] = val
+
+   def __delitem__(self, idx):
+      del self.elts[idx % len(self)]
+
+# CONDITIONAL FUNCTION FOR GOAL CHANGE:
+# condition = condition(curr_pos, curr_goal)
+
+def dgoal_generator(transitions, goals):
+   """
+   Inputs:
+      transitions (list(fn: pos, goal -> new_goal)): list of M transitioning functions
+      goals (Array(Coords)): array of M goals
+
+   Output:
+      func: pos, old_goals => new_goals
+   """
+   # assert len(transitions) == goals.shape[0], f"There are {len(goals)} goals but {len(transitions)} transitions was provided!"
+   M = len(transitions)
+
+   def dgoal(pos, old_goals):
+      for idx in range(M - 1, -1, -1):
+         if idx == M - 1:
+            new_goals = vmap(transitions[idx], (0, 0))(pos, old_goals)
+         else:
+            cond = vmap(np.array_equal, (0, None))(old_goals, goals[idx])
+            condition = np.stack((cond, cond), axis=1)
+            new_goals = np.where(condition, vmap(transitions[idx], (0, 0))(pos, old_goals), new_goals)
+
+      return new_goals
+
+   return dgoal

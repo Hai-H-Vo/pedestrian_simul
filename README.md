@@ -23,6 +23,7 @@ The function of each file is listed here:
 
 **Pedestrian_*.py**: Simulation/Extraction code for different pedestrian setups
 
-# pedestrian_learning_main
+# pedestrian_learning-main
 
+Original directory provided by Dr. Alexander Cohen.
 dataloader.py and train.py modified to work with trajectory training instead of timepoint training.

@@ -20,7 +20,8 @@ vectorize = np.vectorize
 
 from functools import partial
 from simulator.utils import normal, numpify_wall, dgoal_generator
-from simulator.force import ttc_force_tot, wall_energy_tot, goal_velocity_force_tot
+from simulator.force import ttc_visual_force_tot, ttc_visual_force_unsummed_tot, wall_energy_tot, goal_velocity_force_tot
+from simulator.vision import identity_visual_interaction_tot
 from simulator.render import render
 from simulator.dynamics import pedestrian, PedestrianState, StraightWall
 
@@ -85,7 +86,7 @@ def force_fn(state):
 
     new_goal = new_goal_fn(state.position, state.goal)
 
-    return PedestrianState(ttc_force_tot(state.position, state.velocity, state.radius, displacement, 1.5, 3) +
+    return PedestrianState(ttc_visual_force_tot(state.position, state.velocity, state.radius, displacement, identity_visual_interaction_tot, 1.5, 3) +
                            body_force(state.position) + wall_force(state.position) +
                            goal_velocity_force_tot(state.velocity, state.goal_speed, state.goal_orientation),
                            None, None, None, None, new_goal, None)
@@ -112,6 +113,7 @@ state = init(pos, 0.1, key=V_key, goal=goal)
 positions = []
 velocities = []
 thetas = []
+seen = []
 
 for i in range(1250):
     print(f"Current loop: {i}")
@@ -119,6 +121,7 @@ for i in range(1250):
     #     state = step(_, state)
     state = lax.fori_loop(0, delta, step, state)
 
+    seen += [np.linalg.norm(ttc_visual_force_unsummed_tot(state.position, state.velocity, state.radius, displacement, identity_visual_interaction_tot, 1.5, 3), axis=2)]
     positions += [state.position]
     velocities += [state.velocity]
     thetas += [state.orientation()]
@@ -126,7 +129,8 @@ for i in range(1250):
 print(state)
 
 # MP4 PRODUCTION
-render(frame_size, positions, dt * delta, 'pedestrian_evacuation', extra=thetas, limits=(0, 2 * onp.pi), walls=[wall_upper, wall_lower, wall_left, wall_right_down, wall_right_up], size=0.1)
+render(frame_size, positions, dt * delta, 'vision_pedestrian_evacuation', extra=thetas, limits=(0, 2 * onp.pi), walls=[wall_upper, wall_lower, wall_left, wall_right_down, wall_right_up],
+       size=0.1, vision_target=75, detections=np.array(seen), threshold=0.001)
 
 # NPZ PRODUCTION
 np_positions = np.array(positions)
@@ -137,4 +141,4 @@ time_step = np.array(delta * dt)
 walls = [numpify_wall(wall) for wall in (wall_upper, wall_lower, wall_left, wall_right_down, wall_right_up)]
 np_walls = np.array(walls)
 
-np.savez("pedestrian_evacuation", positions = np_positions, velocities = np_velocities, orientations = np_orientations, walls = np_walls, time_step=time_step)
+np.savez("vision_pedestrian_evacuation", positions = np_positions, velocities = np_velocities, orientations = np_orientations, walls = np_walls, time_step=time_step)

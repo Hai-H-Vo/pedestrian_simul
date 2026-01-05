@@ -1,5 +1,5 @@
-from simulator.extract import extract
-from simulator.render import render, traj_render
+from simulator.extract import extract, load_shibuya
+from simulator.render import render
 from simulator.force import ttc_visual_force_unsummed_tot
 from simulator.vision import identity_visual_interaction_tot
 from simulator.utils import ttc_tot, hmean
@@ -9,19 +9,17 @@ from jax import vmap
 from jax_md import space
 from functools import partial
 
-# NAME = "SCENARIO_1_SESSION_1_TRIAL_1"
-# NAME = "SCENARIO_2_SESSION_2_TRIAL_5"
-# NAME = "SCENARIO_3_SESSION_2_TRIAL_3"
-# NAME = "SCENARIO_4_SESSION_1_TRIAL_6"
-# NAME = "SCENARIO_5_SESSION_2_TRIAL_4"
-NAME = "SCENARIO_6_SESSION_1_TRIAL_2"
+NAME = "transformed_Event111_middledensity"
 
-SMOOTH = True
+SMOOTH = False
 
 SAVE_NAME = NAME if not SMOOTH else f"{NAME}_smooth"
 
-data = extract(f"Trajectories_Flip/{NAME}", save=True, savefilename=f"Pedestrians_Data/{SAVE_NAME}", smooth=SMOOTH, timeframe=9)
+load_shibuya(f"Shibuya/{NAME}.txt")
 
+data = extract(f"Shibuya/{NAME}", save=True, savefilename=f"Pedestrians_Data/{SAVE_NAME}", smooth=SMOOTH, timeframe=9)
+
+print('hi')
 positions = data['positions']
 velocities = data['velocities']
 orientations = data['orientations']
@@ -46,10 +44,8 @@ displacement, shift = space.free()
 
 detections = np.linalg.norm(vmap(partial(ttc_visual_force_unsummed_tot, visual_action=identity_visual_interaction_tot, k=1.5, t_0=3.0), (0, 0, None, None))(positions, velocities, 0.1, displacement), axis=3)
 
-render(5.9, positions, time_step, name=f"Pedestrians_Data/{SAVE_NAME}", origin=(-2.95, -2.95), size=0.1, extra=orientations, limits=(-np.pi, np.pi), periodic=True,
+render(70, positions, time_step, name=f"Pedestrians_Data/{SAVE_NAME}", size=0.1, extra=orientations, limits=(-np.pi, np.pi), periodic=True,
        vision_target=int(total_num / 4), detections=detections, threshold=0.001)
-
-traj_render(5.9, positions, name=f"Pedestrians_Data/{SAVE_NAME}", origin=(-2.95, -2.95), null=np.array([999, 999]), focus=int(total_num/4))
 
 def counter(positions, null):
     def _counter(position):

@@ -1,4 +1,4 @@
-# SIMULATOR
+# simulator
 
 
 The function of each file is listed here:

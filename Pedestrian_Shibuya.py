@@ -20,7 +20,8 @@ vectorize = np.vectorize
 
 from functools import partial
 from simulator.utils import normal, numpify_wall, dgoal_generator
-from simulator.force import ttc_force_tot, wall_energy_tot, goal_velocity_force_tot
+from simulator.force import ttc_visual_force_tot, ttc_visual_force_unsummed_tot, wall_energy_tot, goal_velocity_force_tot
+from simulator.vision import identity_visual_interaction_tot
 from simulator.render import render
 from simulator.dynamics import pedestrian, PedestrianState, StraightWall
 
@@ -179,7 +180,7 @@ def force_fn(state):
 
     new_goal = new_goal_fn(state.position, state.goal)
 
-    return PedestrianState(ttc_force_tot(state.position, state.velocity, state.radius, displacement, 1.5, 3) +
+    return PedestrianState(ttc_visual_force_tot(state.position, state.velocity, state.radius, displacement, identity_visual_interaction_tot, 1.5, 3) +
                            body_force(state.position) + wall_force(state.position) +
                            goal_velocity_force_tot(state.velocity, state.goal_speed, state.goal_orientation),
                            None, None, None, key, new_goal, None)
@@ -214,8 +215,8 @@ positions = []
 velocities = []
 thetas = []
 
-# 1250
-for i in range(1500):
+# 1500
+for i in range(100):
     print(f"Current loop: {i}")
     state = lax.fori_loop(0, delta, step, state)
 
@@ -277,7 +278,8 @@ lines.extend([np.array([point_16, point_5]), np.array([point_15, point_19])])
 lines.extend([np.array([point_6, point_22]), np.array([point_20, point_21])])
 
 # MP4 PRODUCTION
-render(frame_size, positions, dt * delta, 'pedestrian_shibuya', extra=thetas, limits=(0, 2 * onp.pi), walls=[wall_hori_l, wall_hori_u, wall_vert_l, wall_vert_r], lines=lines, size=0.1)
+render(frame_size, positions, dt * delta, 'vision_pedestrian_shibuya', extra=thetas, limits=(0, 2 * onp.pi), walls=[wall_hori_l, wall_hori_u, wall_vert_l, wall_vert_r], lines=lines,
+       size=0.1)
 
 # NPZ PRODUCTION
 np_positions = np.array(positions)
@@ -288,4 +290,4 @@ time_step = np.array(delta * dt)
 walls = [numpify_wall(wall) for wall in (wall_hori_l, wall_hori_u, wall_vert_l, wall_vert_r)]
 np_walls = np.array(walls)
 
-np.savez("pedestrian_shibuya", positions = np_positions, velocities = np_velocities, orientations = np_orientations, walls = np_walls, time_step=time_step)
+np.savez("vision_pedestrian_shibuya", positions = np_positions, velocities = np_velocities, orientations = np_orientations, walls = np_walls, time_step=time_step)

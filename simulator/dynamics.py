@@ -2,6 +2,7 @@
 
 import numpy as onp
 import jax.numpy as np
+import jax
 from jax import random
 from jax import jit
 from jax import vmap
@@ -114,7 +115,7 @@ def chiral_am(shift_fn, displacement_fn, dt, N, box_size, g = 0.018, D_r = 0.009
 
 
 def orient_goal(goal, position):
-    # updates new goal orientation to point towards goal point:
+    """Computes the orientation angle, which is the angle between the x-axis and the goal-position line."""
     disp_to_goal = goal - position
     dist_to_goal = np.linalg.norm(disp_to_goal, axis=1)
     _dist_to_goal = np.stack([dist_to_goal, dist_to_goal], axis=1)
@@ -125,7 +126,7 @@ def orient_goal(goal, position):
 
 
 class PedestrianState(namedtuple("PedestrianState", ['position', 'velocity', 'radius', 'goal_speed', 'key', 'goal', 'goal_orientation'])):
-    """Implements state of pedestrians, using goal points instead of goal directions
+    """Implements state of pedestrians, using goal points instead of goal directions.
 
     Args:
         position: (N, 2) array of positions
@@ -133,10 +134,8 @@ class PedestrianState(namedtuple("PedestrianState", ['position', 'velocity', 'ra
         radius: 1 scalar of particle radius
         goal_speed: (1,)/(N, 1) array of goal speeds
         key: RNG key for stochasticity
-
-    Optional args:
         goal: (N, 2) list of goals for each particle
-    The functions decides when a target is reached, and decides the new target then.
+        goal_orientation: (N) list of angles for each particle. Should pass in goal instead of goal_orientation directly.
     """
     def speed(self):
         """Returns the speed of all pedestrians"""
@@ -150,7 +149,6 @@ class PedestrianState(namedtuple("PedestrianState", ['position', 'velocity', 'ra
         """Returns the kinetic energy of all pedestrians"""
         return (np.linalg.norm(self.velocity, axis=1) ** 2) / 2
 
-
 class Wall(object):
     pass
 
@@ -160,29 +158,26 @@ class StraightWall(Wall):
         self.end = end
 
 class CircleWall(Wall):
+    # not used.
     def __init__(self, center, radius):
         self.center = center
         self.radius = radius
 
-def pedestrian(shift_fn, force_fn, dt, N, **sim_kwargs):
+def pedestrian(shift_fn, force_fn, dt, N, **sim_kwargs) -> tuple[function, function]:
     """
     Simulation of pedestrian models
 
-    Inputs:
-        shift_fn (func)             : returned by jax_md.space
-        displacement_fn (func)      : returned by jax_md.space
-        force_fn (func) : a function characterizing the interaction between
+    Args:
+        shift_fn (function)             : returned by jax_md.space
+        force_fn (function) : a function characterizing the interaction between
                                     pedestrians
         dt (float)      : Floating point number specifying the timescale (step size) of the simulation.
         N (int)         : Integer number specifying the number of particles in the simulation
-
-    Extra inputs:
         stochastic (bool)   : True if simulation should be stochastic. Defaults to True
         experimental (bool) : True to toggle some experimental features. Defaults to False
 
-    Outputs:
-        init_fn, step_fn (funcs): functions to initialize the simulation and to timestep
-            the simulation
+    Returns:
+        Two functions to initialize the simulation and to timestep the simulation
     """
     # force_fn = jit(quantity.canonicalize_force(energy_or_force_fn))
     # force_fn = energy_or_force_fn
@@ -198,15 +193,13 @@ def pedestrian(shift_fn, force_fn, dt, N, **sim_kwargs):
         experimental = False
 
 
-    def init_fn(pos, radius, **kwargs):
+    def init_fn(pos, radius, **kwargs) -> PedestrianState:
         """
         Initializes a pedestrian simulation.
 
-        Inputs:
+        Args:
             pos (Array): position of all pedestrians
             radius (float): collision radius of pedestrians
-
-        Extra Inputs:
             key (RNG key)
             goal_speed (Array)
             velocity (Array)
@@ -214,8 +207,8 @@ def pedestrian(shift_fn, force_fn, dt, N, **sim_kwargs):
             status (list(int))
             condition (list(functions(idx, state)))
 
-        Output:
-            An ExperimentalPedestrianState instance.
+        Returns:
+            A PedestrianState instance.
         """
         key = kwargs['key'] if 'key' in kwargs else None
 
@@ -258,7 +251,16 @@ def pedestrian(shift_fn, force_fn, dt, N, **sim_kwargs):
 
         return PedestrianState(pos, velocity, radius, goal_speed, key, goal, goal_orientation)
 
-    def step_fn(_, state):
+    def step_fn(_, state) -> PedestrianState:
+        """
+        Increments the system by one timestep.
+
+        Args:
+            state (PedestrianState): previous state of the system
+
+        Returns:
+            A PedestrianState instance corresponding to a later state of the system
+        """
         dstate = force_fn(state)
 
         key = dstate.key if dstate.key is not None else state.key

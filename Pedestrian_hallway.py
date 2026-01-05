@@ -20,7 +20,8 @@ vectorize = np.vectorize
 
 from functools import partial
 from simulator.utils import normal
-from simulator.force import ttc_force_tot, wall_energy_tot, goal_velocity_force_tot
+from simulator.force import ttc_visual_force_tot, ttc_visual_force_unsummed_tot, wall_energy_tot, goal_velocity_force_tot
+from simulator.vision import identity_visual_interaction_tot
 from simulator.render import render
 from simulator.dynamics import pedestrian, PedestrianState, StraightWall
 
@@ -50,7 +51,8 @@ def energy_fn(pos, radius):
 def force_fn(state):
     wall_force = quantity.force(partial(energy_fn, radius=state.radius))
     body_force = quantity.force(energy.soft_sphere_pair(displacement, sigma=2.*state.radius))
-    return PedestrianState(ttc_force_tot(state.position, state.velocity, state.radius, displacement, 1.5, 3) + body_force(state.position) + wall_force(state.position) + goal_velocity_force_tot(state.velocity, state.goal_speed, state.goal_orientation), None, None, None, None, None, None)
+    return PedestrianState(ttc_visual_force_tot(state.position, state.velocity, state.radius, displacement, identity_visual_interaction_tot, 1.5, 3)
+                          + body_force(state.position) + wall_force(state.position) + goal_velocity_force_tot(state.velocity, state.goal_speed, state.goal_orientation), None, None, None, None, None, None)
 
 init, step = pedestrian(shift, force_fn, dt, N)
 
@@ -82,6 +84,7 @@ state = init(pos, 0.1, key=V_key, goal_orientation=goal_orientation)
 positions = []
 velocities = []
 thetas = []
+seen = []
 
 for i in range(1250):
   print(f"Current loop: {i}")
@@ -90,11 +93,10 @@ for i in range(1250):
   positions += [state.position]
   velocities += [state.velocity]
   thetas += [state.goal_orientation]
-
-print(state)
+  seen += [np.linalg.norm(ttc_visual_force_unsummed_tot(state.position, state.velocity, state.radius, displacement, identity_visual_interaction_tot, 1.5, 3), axis=2)]
 
 # MP4 PRODUCTION
-render(box_size, positions, dt * delta, 'pedestrian_hallway', extra=thetas, limits=(0, 2 * onp.pi), walls=[wall_low, wall_up])
+render(box_size, positions, dt * delta, 'pedestrian_hallway', extra=thetas, limits=(0, 2 * onp.pi), walls=[wall_low, wall_up], vision_target=150, detections=np.array(seen), threshold=0.001)
 
 # # NPZ PRODUCTION
 np_positions = np.array(positions)

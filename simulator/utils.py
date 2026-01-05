@@ -2,10 +2,12 @@
 
 import numpy as onp
 import jax.numpy as np
+import jax
 from jax import random
 from jax import jit
 from jax import vmap
 from jax import lax
+from jax import scipy
 from jax import config
 config.update("jax_enable_x64", True)
 
@@ -22,8 +24,6 @@ from .basis import LegendrePolynomial, LaguerrePolynomial, LegendreBase, Laguerr
 
 # from typing import Union, Callable
 
-# SPACES
-
 @jit
 def angle_correct(theta):
     return np.where(
@@ -33,44 +33,51 @@ def angle_correct(theta):
     )
 
 def _normalize(v, v_lim=0):
-    v_norm = np.linalg.norm(v, keepdims=True)
-    return np.where(v_norm > v_lim, v/v_norm, v)
+    v_norm = np.linalg.norm(v)
+    return np.where(v_norm > v_lim, v * v_lim/v_norm, v)
 
 @jit
-def normalize_cap(v, v_lim=0):
+def normalize_cap(v, v_lim=0) -> jax.Array[jax.Array]:
+   """Normalize an array of vectors and downscale vectors if its norm exceeds the limit"""
    return vmap(_normalize, (0, None))(v, v_lim)
 
 # @partial(jit, static_argnums=1)
-def wall_dist(pos, start, end, displacement):
+def wall_dist(pos, start, end, displacement) -> jax.Array[float]:
    """
    Computes displacement from a particle to a wall. A wall is parameterized by
    its two endpoints.
 
-   Inputs:
+   Args:
       pos (Array): array denoting particle position
-      start, end (Array): arrays denoting wall positions
-      displacement (fn): function to compute distance between 2 points
+      start (Array): array denoting one end of the wall
+      end (Array): array denoting other end of the wall
+      displacement (function): function to compute distance between 2 points
 
-   Output:
+   Returns:
       Array denoting displacement from particle to wall
    """
+   # issue: distance should be computed using the displacement function, preferably not by direct subtraction.
    wall_len = np.dot(end - start, end - start)
    # t = max(0, min(1, np.dot(pos - start, end - start) / wall_len))
    t = np.max(np.array([0, np.min(np.array([1, np.dot(pos - start, end - start) / wall_len]), axis = 0)]), axis = 0)
    proj = start + t * (end - start)
    return pos - proj
 
+
+# def hard_body_energy(dr, radius):
+#    1 / (3 * (np.linalg.norm(dr) / radius) ** 3)
+
 # @partial(jit, static_argnums=1)
-def wall_energy(pos, wall, radius, displacement):
+def wall_energy(pos, wall, radius, displacement) -> float:
    """
-   Used to model the repulsion between a particle and a wall.
+   Used to model the repulsion between a particle and a straight wall.
 
-   Inputs:
+   Args:
       pos (Array): particle position
-      wall (Wall obj): object representing a wall, with start and end attrs
+      wall (StraightWall): object representing a wall, with start and end attrs
 
-   Output:
-      Interaction between particle and the wall
+   Returns:
+      A float denoting the interaction energy between the particle and the wall
    """
    start = lax.stop_gradient(wall.start)
    end = lax.stop_gradient(wall.end)
@@ -115,22 +122,26 @@ def init_goal_speed(key, N, speed_mean=1.3, speed_var=0.3):
 def ttc_potential_fn(k, t, t_0):
    return np.array((k / np.square(t)) * np.exp(-t/ t_0))
 
-
 @jit
 def time_to_collide(dpos, V_i, V_j, R):
    """
-   dpos = pos_i - pos_j, V_i, V_j : ndarrays
-   R : float
+   Computes the time-to-collision of particle i and j.
 
-   The time to collide is the smaller root of the
-   following quadratic equation at^2 + bt + c = 0
+   Args:
+      dpos (Array): pos_i - pos_j
+      V_i (Array): velocity of i
+      V_j (Array): velocity of j
+      R (float): radius of pedestrian
+
+   Returns:
+      A float denoting the time to collision between i and j. Returns 999 if no collision.
    """
    # stop grad for non-positional args
    V_i = lax.stop_gradient(V_i)
    V_j = lax.stop_gradient(V_j)
    R = lax.stop_gradient(R)
 
-   t_max = 99
+   t_max = 999
    dv = V_i - V_j
 
    a = np.dot(dv, dv)
@@ -150,7 +161,8 @@ def time_to_collide(dpos, V_i, V_j, R):
 
 @jit
 def ttc_force(dpos, V_i, V_j, R, k, t_0):
-   t_max = 99
+   """Returns the ttc interaction between i and j"""
+   t_max = 999
    dv = V_i - V_j
 
    sq_dist = np.dot(dpos, dpos)
@@ -172,23 +184,15 @@ def ttc_force(dpos, V_i, V_j, R, k, t_0):
                             np.array([0., 0.]),
                             - k*np.exp(-t/t_0)*(dv - (dv * b - dpos * a)/(np.sqrt(det)))/(a*np.square(t))*(2/t+ 1/t_0)))
 
-@jit
-def safe_time_to_collide(dpos, V_i, V_j, R, i, j):
-   return np.where(i != j, time_to_collide(dpos, V_i, V_j, R), 99)
-
 def ttc_tot(pos, V, R, displacement):
+   """Returns the matrix of ttc between all pairs of pedestrians"""
    ttc = vmap(vmap(
-      safe_time_to_collide, (0, None, 0, None, None, 0)
-      ), (0, 0, None, None, 0, None)
+      time_to_collide, (0, None, 0, None)
+      ), (0, 0, None, None)
       )
    dpos = space.map_product(displacement)(pos, pos)
 
-   dim = V.shape[0]
-
-   I = np.arange(0, dim)
-   J = np.arange(0, dim)
-
-   return ttc(dpos, V, V, R, I, J)
+   return ttc(dpos, V, V, R)
 
 def _ttc_force_tot(pos, V, R, displacement, k=1.5, t_0=3.0):
    force_fn = vmap(vmap(ttc_force, (0, 0, None, None, None, None)), (0, None, 0, None, None, None))
@@ -197,16 +201,134 @@ def _ttc_force_tot(pos, V, R, displacement, k=1.5, t_0=3.0):
 
    return np.sum(force_fn(dpos, V, V, R, k, t_0), axis=1)
 
-# def goal_velocity_force(state):
-#    if state.goal_orientation is None:
-#       return (normal(state.goal_speed, state.orientation()) - state.velocity) / .5
-#    return (normal(state.goal_speed, state.goal_orientation) - state.velocity) / .5
-
 def goal_velocity_force(velocity, goal_speed, goal_orientation):
    return (goal_speed * np.array([np.cos(goal_orientation), np.sin(goal_orientation)]) - velocity) / .5
 
-def numpify_wall(wall):
+# DATA ANALYSIS
+
+def numpify_wall(wall) -> jax.Array:
+   """Converts a StraightWall instance into jax.Array"""
    return np.array([wall.start, wall.end])
+
+def counter(arr, null):
+   """
+   Arguments:
+      arr (ArrayLike): input array
+      null (ArrayLike): null array for comparison
+
+   Returns:
+      0 if array is the null array, 1 otherwise.
+   """
+   return np.where(np.array_equal(arr, null), np.array(0), np.array(1))
+
+def hmean(arr, axis=None, dtype=None, out=None, keepdims=None, *, where=None) -> float:
+   """
+   Return the harmonic mean of array elements along a given axis.
+
+   JAX-compatible implementation similar to scipy.stats.hmean()
+
+   Arguments:
+      arr (ArrayLike): input array.
+      axis (Axis): optional, int or sequence of ints, default=None. Axis along which the mean to be computed. If None, mean is computed along all the axes.
+      dtype (DTypeLike | None): The type of the output array. If None (default) then the output dtype will be match the input dtype for floating point inputs, or be set to float32 or float64 for non-floating-point inputs.
+      keepdims (bool): bool, default=False. If true, reduced axes are left in the result with size 1.
+      where (ArrayLike | None): optional, boolean array, default=None. The elements to be used in the mean. Array should be broadcast compatible to the input.
+      out (None): Unused by JAX.
+
+   Returns:
+      An array of the harmonic mean along the given axis
+   """
+   return 1 / np.mean(1 / arr, axis=axis, dtype=dtype, out=out, keepdims=keepdims, where=where)
+
+def special_sme(array, sum_num, null=None) -> jax.Array:
+   """
+   Returns the moving average of a 1D array. Compatible with JAX.
+
+   Arguments:
+      array (jnp.Array): 1D array of data
+      sum_num (int): size of kernel, should be odd.
+      null (None | int | float): A number designated to represent a nonexistent datapoint.
+
+   Returns:
+      The moving average array, of the same size as the original array
+   """
+   count = sum_num * np.ones_like(array)
+   kernel = np.ones(sum_num)
+   summed = scipy.signal.convolve(array, kernel, mode="same")
+
+   null_count = np.where(array == null, 1, 0)
+
+   summed_null_count = scipy.signal.convolve(null_count, kernel, mode="same")
+
+   summed_count = np.where(count - summed_null_count == 0, 1, count - summed_null_count)
+
+   out = (summed - null * summed_null_count) / summed_count
+
+   out = np.where(array == null, null, out)
+
+   return out
+
+
+# CONDITIONAL FUNCTION FOR GOAL CHANGE:
+# condition = condition(curr_pos, curr_goal)
+
+def dgoal_generator(transitions, goals) -> function:
+   """
+   Returns a function that allows for transition within a finite set of goals, given some conditions.
+
+   Args:
+      transitions (list(fn: pos, goal -> new_goal)): list of M transitioning functions
+      goals (Array(Coords)): array of M goals
+
+   Returns:
+      A function.
+   """
+   # assert len(transitions) == goals.shape[0], f"There are {len(goals)} goals but {len(transitions)} transitions was provided!"
+   M = len(transitions)
+
+   def dgoal(pos, old_goals):
+      """Takes in current position and current goal, and updates goal"""
+      for idx in range(M - 1, -1, -1):
+         if idx == M - 1:
+            new_goals = vmap(transitions[idx], (0, 0))(pos, old_goals)
+         else:
+            cond = vmap(np.array_equal, (0, None))(old_goals, goals[idx])
+            condition = np.stack((cond, cond), axis=1)
+            new_goals = np.where(condition, vmap(transitions[idx], (0, 0))(pos, old_goals), new_goals)
+
+      return new_goals
+
+   return dgoal
+
+
+# VISION:
+def bearing_angle(dpos, V, R):
+   """Computes the angle between two people and the current person's orientation"""
+   # dpos == 0 ==> return pi (cuz they cant see themselves)
+   # else: compute dot prod between dpos and V
+   magn_dpos = np.linalg.norm(dpos)
+
+   sin_angle = np.cross(V, dpos)
+   cos_angle = np.dot(V, dpos)
+   center_angle = np.atan2(sin_angle, cos_angle)
+
+   angle = np.where(magn_dpos == 0, np.array([[np.pi]] * 3),
+                    np.array([[center_angle]] * 3) + np.array([[0], [-1], [1]]) * np.asin(np.min(np.array([R / magn_dpos, 1]))))
+
+   return angle
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 # TEST SECTION
 
@@ -496,31 +618,3 @@ class LoopedList(object):
 
    def __delitem__(self, idx):
       del self.elts[idx % len(self)]
-
-# CONDITIONAL FUNCTION FOR GOAL CHANGE:
-# condition = condition(curr_pos, curr_goal)
-
-def dgoal_generator(transitions, goals):
-   """
-   Inputs:
-      transitions (list(fn: pos, goal -> new_goal)): list of M transitioning functions
-      goals (Array(Coords)): array of M goals
-
-   Output:
-      func: pos, old_goals => new_goals
-   """
-   # assert len(transitions) == goals.shape[0], f"There are {len(goals)} goals but {len(transitions)} transitions was provided!"
-   M = len(transitions)
-
-   def dgoal(pos, old_goals):
-      for idx in range(M - 1, -1, -1):
-         if idx == M - 1:
-            new_goals = vmap(transitions[idx], (0, 0))(pos, old_goals)
-         else:
-            cond = vmap(np.array_equal, (0, None))(old_goals, goals[idx])
-            condition = np.stack((cond, cond), axis=1)
-            new_goals = np.where(condition, vmap(transitions[idx], (0, 0))(pos, old_goals), new_goals)
-
-      return new_goals
-
-   return dgoal

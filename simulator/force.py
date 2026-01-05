@@ -2,6 +2,7 @@
 
 import numpy as onp
 import jax.numpy as np
+import jax
 from jax import random
 from jax import jit
 from jax import vmap
@@ -18,17 +19,32 @@ vectorize = np.vectorize
 
 from functools import partial
 
-from .basis import LegendrePolynomial, LaguerrePolynomial, LaguerreBase, LegendreBase
-from .utils import wall_energy, align_fn, ttc_potential_fn, ttc_tot, ttc_force, normalize_cap, goal_velocity_force
+from .utils import wall_energy, align_fn, ttc_potential_fn, ttc_tot, ttc_force, normalize_cap, goal_velocity_force, normal
+from .vision import bearing_angle_tot
+
 
 # WALL INTERACTIONS
 
-def wall_energy_tot(poss, wall, radius, displacement):
+def wall_energy_tot(poss, wall, radius, displacement) -> float:
+   """
+   Compute the total interaction energy between pedestrians and straight walls.
+   Walls are modeled to have an interaction energy scaling with 1/r^3.
+
+   Args:
+      poss (Array): array of all pedestrians positions
+      wall (StraightWall): wall object
+      radius (float): radius of pedestrian
+      displacement (function): displacement_fn as returned by jax_md.space
+
+   Returns:
+      A float value of the total interaction energy between pedestrians and straight walls
+   """
    return np.sum(vmap(wall_energy, (0, None, None, None))(poss, wall, radius, displacement))
 
 # CHIRAL INTERACTIONS
 
 def align_tot(R, theta, displacement):
+   # only used for chiral AM simuls
    # Alignment factor
    align = vmap(vmap(align_fn, (0, None, 0)), (0, 0, None))
 
@@ -39,94 +55,129 @@ def align_tot(R, theta, displacement):
 
 # PEDESTRIAN INTERACTIONS
 
-def ttc_potential_tot(pos, V, R, displacement, k=1.5, t_0=3.0):
+def ttc_potential_tot(pos, V, R, displacement, k=1.5, t_0=3.0) -> jax.Array[float]:
    """
    The potential energy of pedestrian interaction, according to
    the anticipatory interaction law detailed in [1].
 
-   Inputs:
+   Args:
       pos (ndarray)     : position vector of all particles
       V (ndarray)       : velocity vector "   "      "
       R (float)         : collision radius of a particle
       displacement (fn) : displacement function produced by jax_md.space
       k, t_0 (floats)   : interaction params
 
-   Output:
-      ndarray of potential energy of each particle
+   Returns:
+      Array of potential energy of each particle
 
    [1] I. Karamouzas, B. Skinner, Stephen J. Guy.
    "Universal Power Law Governing Pedestrian Interactions"
    """
+   # should use force_fn directly instead of potential energy
    return np.array(np.sum(smap._diagonal_mask(ttc_potential_fn(k, ttc_tot(pos, V, R, displacement), t_0))) / 2)
 
-def ttc_force_tot(pos, V, R, displacement, k=1.5, t_0=3.0):
+def ttc_force_unsummed_tot(pos, V, R, displacement, k=1.5, t_0=3.0) -> jax.Array[jax.Array[jax.Array[float]]]:
+   """
+   The pedestrian social interaction between all pairs of pedestrians, according to
+   the anticipatory interaction law detailed in [1].
+
+   Arguments:
+      pos (ndarray): position vector of all particles, shape (N, 2)
+      V (ndarray): velocity vector of all particles, shape (N, 2)
+      R (float): collision radius of a particle
+      displacement (fn): displacement function produced by jax_md.space
+      k (float): interaction strength param
+      t_0 (float): characteristic interaction time
+
+   Returns:
+      Array of shape (N, N, 2), where array[i, j] denotes the force experienced by i due to j.
+
+   [1] I. Karamouzas, B. Skinner, Stephen J. Guy.
+   "Universal Power Law Governing Pedestrian Interactions"
+   """
    force_fn = vmap(vmap(ttc_force, (0, 0, None, None, None, None)), (0, None, 0, None, None, None))
 
    dpos = space.map_product(displacement)(pos, pos)
 
-   return np.sum(normalize_cap(force_fn(dpos, V, V, R, k, t_0), 5), axis=1)
+   return normalize_cap(force_fn(dpos, V, V, R, k, t_0), 5)
 
-def goal_velocity_force_tot(velocities, goal_speeds, goal_orientations=None):
+def ttc_force_tot(pos, V, R, displacement, k=1.5, t_0=3.0) -> jax.Array[jax.Array[float]]:
+   """
+   The pedestrian social force experienced by each individual pedestrian, according to
+   the anticipatory interaction law detailed in [1].
+
+   Arguments:
+      pos (ndarray): position vector of all particles, shape (N, 2)
+      V (ndarray): velocity vector of all particles, shape (N, 2)
+      R (float): collision radius of a particle
+      displacement (fn): displacement function produced by jax_md.space
+      k (float): interaction strength param. Defaults to 1.5
+      t_0 (float): characteristic interaction time. Defaults to 3.0
+
+   Returns:
+      Array of shape (N, 2), where array[i] denotes the total force experienced by i.
+
+   [1] I. Karamouzas, B. Skinner, Stephen J. Guy.
+   "Universal Power Law Governing Pedestrian Interactions"
+   """
+   return np.sum(ttc_force_unsummed_tot(pos, V, R, displacement, k, t_0), axis=1)
+
+def ttc_visual_force_unsummed_tot(pos, V, R, displacement, visual_action, k=1.5, t_0=3.0) -> jax.Array[jax.Array[jax.Array[float]]]:
+   """
+   The pedestrian social force according to the anticipatory interaction
+   law detailed in [1], augmented with visual information of each pedestrian.
+
+   Arguments:
+      pos (ndarray): position vector of all particles, shape (N, 2)
+      V (ndarray): velocity vector of all particles, shape (N, 2)
+      R (float): collision radius of a particle
+      displacement (fn): displacement function produced by jax_md.space
+      visual_action (fn): a function that takes in a bearing angle matrix of shape (N, N, 3, 1) and returns a matrix of size (N, N, 1) whose entries are numbers in [0, 1]
+      k (float): interaction strength param
+      t_0 (float): characteristic interaction time
+
+   Returns:
+      Array of shape (N, N, 2), where array[i, j] denotes the force experienced by i due to j.
+
+   [1] I. Karamouzas, B. Skinner, Stephen J. Guy.
+   "Universal Power Law Governing Pedestrian Interactions"
+   """
+   return visual_action(bearing_angle_tot(pos, V, R, displacement)) * ttc_force_unsummed_tot(pos, V, R, displacement, k, t_0)
+
+def ttc_visual_force_tot(pos, V, R, displacement, visual_action, k=1.5, t_0=3.0) -> jax.Array[jax.Array[float]]:
+   """
+   The pedestrian social force according to the anticipatory interaction
+   law detailed in [1], augmented with visual information of each pedestrian.
+
+   Arguments:
+      pos (ndarray): position vector of all particles, shape (N, 2)
+      V (ndarray): velocity vector of all particles, shape (N, 2)
+      R (float): collision radius of a particle
+      displacement (fn): displacement function produced by jax_md.space
+      visual_action (fn): a function that takes in a bearing angle matrix of shape (N, N, 3, 1) and returns a matrix of size (N, N, 1) whose entries are numbers in [0, 1]
+      k (float): interaction strength param. Defaults to 1.5
+      t_0 (float): characteristic interaction time. Defaults to 3.0
+
+   Returns:
+      Array of shape (N, 2), where array[i] denotes the total force experienced by i.
+
+   [1] I. Karamouzas, B. Skinner, Stephen J. Guy.
+   "Universal Power Law Governing Pedestrian Interactions"
+   """
+   return np.sum(ttc_visual_force_unsummed_tot(pos, V, R, displacement, visual_action, k, t_0), axis=1)
+
+def goal_velocity_force_tot(velocities, goal_speeds, goal_orientations=None) -> jax.Array[jax.Array[float]]:
    """
    Force representing pedestrian's target velocity.
 
    Arguments:
       velocities (jax.Array): array of particles' velocities
       goal_speeds (jax.Array): array of particles' preferred speeds
-      goal_orientations (jax.Array / None): array of particles' preferred directions. If
-      None is provided, then it is assumed that there is no preferred direction.
+      goal_orientations (jax.Array | None): array of particles' preferred directions. If None is provided, then it is assumed that there is no preferred direction.
 
-   Output:
+   Returns:
       jax.Array of force acting on each particle
    """
    if goal_orientations is None:
-      return (goal_speeds / np.linalg.norm(velocities, axis=1) - 1) * velocities / .5
+      return (normal(goal_speeds, np.atan2(velocities[:, 1], velocities[:, 0])) - velocities) / .5
    return vmap(goal_velocity_force, (0, 0, 0))(velocities, goal_speeds, goal_orientations)
-
-# BASIS POLYNOMIAL EXPANSION
-
-def general_force_generator(weight_paral_arr, weight_perpen_arr, v_0, d_0):
-   # weight tensor has shape (mu_0, mu_1, mu_2)
-
-   def general_force_magnitude(scaled_v, scaled_pos, proj, weight_arr):
-      I, J, K = weight_arr.shape
-      lag_i = np.arange(0, I)
-      lag_j = np.arange(0, J)
-      leg_k = np.arange(0, K)
-
-      def updater(arr, idx, poly_type, val):
-         # True == Laguerre
-         # False == Legendre
-         new_arr = np.where(poly_type,
-                            arr.at[idx].set(LaguerreBase(idx)(val)),
-                            arr.at[idx].set(LegendreBase(idx)(val)))
-         return new_arr, idx
-
-      lag_i = lax.scan(partial(updater, poly_type=True, val=scaled_v), lag_i, lag_i)[0]
-      lag_j = lax.scan(partial(updater, poly_type=True, val=scaled_pos), lag_j, lag_j)[0]
-      leg_k = lax.scan(partial(updater, poly_type=False, val=proj), leg_k, leg_k)[0]
-
-      expansion = weight_arr * np.tensordot(np.tensordot(lag_i, lag_j, axes=0), leg_k, axes=0)
-
-      return np.sum(expansion) * np.exp(-(scaled_v + scaled_pos)/2)
-
-   def general_force(dpos, V_i, V_j):
-      dv = V_i - V_j
-
-      n_pos =  np.linalg.norm(dpos)
-      n_v = np.linalg.norm(dv)
-
-      unit_pos = dpos / n_pos
-      unit_v = dv / n_v
-
-      scaled_pos = n_pos / d_0
-      scaled_v = n_v / v_0
-      proj = np.dot(dv, dpos) / (scaled_pos * scaled_v)
-
-      # force calc
-      force = (general_force_magnitude(scaled_v, scaled_pos, proj, weight_paral_arr) * unit_v +
-              general_force_magnitude(scaled_v, scaled_pos, proj, weight_perpen_arr) * np.matmul(np.identity(2) - np.matmul(unit_v, np.transpose(unit_v)), unit_pos))
-
-      return force
-
-   return general_force

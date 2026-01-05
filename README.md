@@ -22,3 +22,7 @@ The function of each file is listed here:
 **setup.py**: (incomplete) makes the package downloadable
 
 **Pedestrian_*.py**: Simulation/Extraction code for different pedestrian setups
+
+# pedestrian_learning_main
+
+dataloader.py and train.py modified to work with trajectory training instead of timepoint training.

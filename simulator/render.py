@@ -3,6 +3,7 @@ import numpy as onp
 import jax
 import jax.numpy as np
 
+import networkx as nx
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -19,39 +20,36 @@ sns.set_style(style="white")
 
 def render(box_size, states, time_step, name="default", origin = (0, 0), **kwargs):
     """
-    Creates a rendering of the system. Edit this to
-    make it run on matplotlib.
+    Creates a rendering of the system.
 
-    The Particle namedtuple has the form [R, theta, V, omega] where R is an ndarray of
-    shape [particle_count, spatial_dimension], while V, theta, and omega are ndarrays of shape
-    [particle_count].
-
-    Inputs:
+    Arguments:
         box_size (float): size-length of box
         states (list(array)): list of particle positions.
         time_step (float): rendering time step, equal to dt * DELTA
-        name (text): name of file to be saved
-        origin (indexable): coordinates of the origin of simulation. Defaults to (0, 0)
+        name (text | None): name of file to be saved
+        origin (indexable | None): coordinates of the lower left corner. Defaults to (0, 0)
 
-    Extra inputs:
-        extra (list(array)): list of any other particle parameter
-        limits (tuple(min, max)): tuple of minimum and maximum values of above param
-        periodic (bool): True if extra is a periodic param (e.g. angle). Defaults to True
-        walls (list(Walls)): list of walls to render
-        lines (list(Array)): list of lines to add
-        size (float): size of simulated particles, measured in same unit as box_size
+        extra (list(array) | None): list of any other particle parameter
+        limits (tuple(min, max) | None): tuple of minimum and maximum values of above param.
+        periodic (bool | None): True if extra is a periodic param (e.g. angle). Defaults to True
 
-    Output:
+        walls (list(Walls) | None): list of walls to render
+        lines (list(Array) | None): list of lines to add
+        size (float | None): size of simulated particles, measured in same unit as box_size
+
+        vision_target (int | None): index of pedestrian to show vision lines
+        detections (Array | None): array of shape (M, N, N) depicting visual interaction. 0 means no interaction.
+        threshold (float | None): social force interaction threshold, below which it will be registered as no interaction. Defaults to 0
+
+    Returns:
         {name}.mp4 file of box state, runs at 50fps
     """
     # if states is a list (sequence of simul. frames)
-    # if not isinstance(states, (onp.ndarray, jax.Array)):
-    #     if not isinstance(states, list):
-    #         states = [states]
-    #     states = np.array(states)
-
-    if not isinstance(states, list):
-        states = [states]
+    if not isinstance(states, (onp.ndarray, jax.Array)):
+        if not isinstance(states, list):
+            states = [states]
+    # if not isinstance(states, list):
+    #     states = [states]
 
 
     R = states
@@ -70,6 +68,18 @@ def render(box_size, states, time_step, name="default", origin = (0, 0), **kwarg
 
         cmap.set_over('black')
         cmap.set_under('black')
+
+    if "vision_target" not in kwargs:
+        target = None
+        detections = None
+    else:
+        target = kwargs["vision_target"]
+        detections = kwargs["detections"][:, target, :]
+        name = f"{name}_POV_{target}"
+        if "threshold" not in kwargs:
+            threshold = 0
+        else:
+            threshold = kwargs["threshold"]
 
     # retrieve number of frames
     # frames = R.shape[0]
@@ -130,7 +140,19 @@ def render(box_size, states, time_step, name="default", origin = (0, 0), **kwarg
             transform=ax.transAxes,
         )
 
-        return particle_plot, timer
+        if target is None:
+            return particle_plot, timer
+
+        curr_detection = detections[frame_num]
+
+        seen = []
+
+        for i in range(len(curr_detection)):
+            if curr_detection[i] >= threshold:
+                seen.append(*ax.plot((curr_x[target], curr_x[i]), (curr_y[target], curr_y[i]), "-k"))
+
+        return particle_plot, timer, *seen
+
 
     artists = []
     for frame in range(frames):
@@ -164,5 +186,103 @@ def render(box_size, states, time_step, name="default", origin = (0, 0), **kwarg
 
     plt.close(fig)  # keep the static PNG from appearing
     anim.save(f"{name}.mp4", writer="ffmpeg", dpi=150)
+
+    print("Rendering complete!")
+
+
+# TRAJECTORY RENDERING
+
+
+def traj_render(box_size, states, name="default", origin = (0, 0), null=None, focus=None, **kwargs):
+    """
+    Creates a rendering of the trajectories of the system.
+
+    Arguments:
+        box_size (float): size-length of box
+        states (list(array)): list of particle positions.
+        name (text | None): name of file to be saved
+        origin (indexable | None): coordinates of the lower left corner. Defaults to (0, 0)
+        null (Array): coordinates of null data
+        focus (int/iterable): trajectory/trajectories to be highlighted
+
+        walls (list(Walls) | None): list of walls to render
+        lines (list(Array) | None): list of lines to add
+        size (float | None): size of simulated particles, measured in same unit as box_size
+
+    Returns:
+        {name}.png file of trajectories
+    """
+        # if states is a list (sequence of simul. frames)
+    if not isinstance(states, (onp.ndarray, jax.Array)):
+        if not isinstance(states, list):
+            states = [states]
+    # if not isinstance(states, list):
+    #     states = [states]
+
+    if isinstance(focus, int):
+        focus = {focus}
+
+    R = states
+
+    # retrieve number of frames
+    # frames = R.shape[0]
+    peoples = len(R[0])
+
+    fig, ax = plt.subplots()
+
+    # formatting plot
+    ax.set_xlim(origin[0], origin[0] + box_size)
+    ax.set_ylim(origin[1], origin[1] + box_size)
+
+    print("Plotting trajectories")
+
+    # single frame rendering
+    def renderer_code(id=0):
+        """
+        Renders trajectory of one pedestrian.
+        Only works for 2D.
+        """
+        if id == peoples:
+            return []
+
+        # particles data
+        R_id = R[:, id]
+        lines_id = np.stack((R_id[:-1], R_id[1:]), 1)
+        # x_id = R_id[:, 0]
+        # y_id = R_id[:, 1]
+
+        if id in focus:
+            alpha = 1
+        else:
+            alpha = 0.1
+
+        # rendering: USE COLOR TO ENCODE POLARIZATION/ ANGLE OF PARTICLES.
+        for line in lines_id:
+            if np.any(line == null):
+                pass
+            else:
+                ax.plot(line[:, 0], line[:, 1], c='b', linestyle='-', alpha=alpha)
+
+    for id in range(peoples):
+        renderer_code(id)
+
+    # WALL RENDERING
+    if 'walls' in kwargs:
+        walls = kwargs['walls']
+        for wall in walls:
+            start = wall.start
+            end = wall.end
+            x_wall = [start[0], end[0]]
+            y_wall = [start[1], end[1]]
+            ax.plot(x_wall, y_wall, 'k')
+
+    # EXTRA DRAWING
+    if 'lines' in kwargs:
+        lines = kwargs['lines']
+        for line in lines:
+            ax.plot(line[:, 0], line[:, 1], '--k')
+
+    plt.savefig(f"{name}.png")
+    plt.close(fig)
 
     print("Rendering complete!")
